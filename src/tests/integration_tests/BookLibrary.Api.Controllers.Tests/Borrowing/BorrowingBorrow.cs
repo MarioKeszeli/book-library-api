@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using BookLibrary.Domain.DTOs;
+using System.Net;
 using System.Net.Http.Json;
 
 namespace BookLibrary.Api.Controllers.Tests.Borrowing;
@@ -6,7 +7,9 @@ namespace BookLibrary.Api.Controllers.Tests.Borrowing;
 public class BorrowingBorrow(CustomWebApplicationFactory<Program> factory) : IClassFixture<CustomWebApplicationFactory<Program>>, IAsyncLifetime
 {
     private readonly HttpClient _client = factory.CreateClient();
-    private readonly List<Guid> _idsToDelete = [];
+    private readonly List<Guid> _borrowingIdsToDelete = [];
+    private readonly List<Guid> _userIdsToDelete = [];
+    private readonly List<Guid> _bookIdsToDelete = [];
 
     [Theory]
     [MemberData(nameof(BorrowingBorrow_BadRequest_Data))]
@@ -32,15 +35,31 @@ public class BorrowingBorrow(CustomWebApplicationFactory<Program> factory) : ICl
     public async Task BorrowingBorrow_ShouldBorrow()
     {
         // Arrange
-        var userId = Guid.NewGuid();
-        var bookId = Guid.NewGuid();
         var borrowDate = DateTimeOffset.UtcNow;
         var returnDate = DateTimeOffset.UtcNow.AddDays(30);
 
+        var book = new BookDto
+        {
+            Author = "Author",
+            Title = "Title"
+        };
+
+        var createBookResponse = await _client.PostAsJsonAsync("/api/book", book);
+        var createBookResult = await createBookResponse.Content.ReadFromJsonAsync<Domain.Entities.Book>();
+
+        var user = new Domain.DTOs.UserDto
+        {
+            Name = "Name",
+            Email = "email@domain.com"
+        };
+
+        var createUserResponse = await _client.PostAsJsonAsync("/api/user", user);
+        var createUserResult = await createUserResponse.Content.ReadFromJsonAsync<Domain.Entities.User>();
+
         var borrowing = new Domain.DTOs.BorrowingDto
         {
-            UserId = userId,
-            BookId = bookId,
+            UserId = createUserResult!.Id,
+            BookId = createBookResult!.Id,
             BorrowDate = borrowDate,
             ReturnDate = returnDate
         };
@@ -55,12 +74,14 @@ public class BorrowingBorrow(CustomWebApplicationFactory<Program> factory) : ICl
 
         Assert.NotNull(result);
         Assert.NotEqual(Guid.Empty, result.Id);
-        Assert.Equal(userId, result.UserId);
-        Assert.Equal(bookId, result.BookId);
+        Assert.Equal(createUserResult.Id, result.UserId);
+        Assert.Equal(createBookResult.Id, result.BookId);
         Assert.Equal(borrowDate, result.BorrowDate);
         Assert.Equal(returnDate, result.ReturnDate);
 
-        _idsToDelete.Add(result.Id);
+        _borrowingIdsToDelete.Add(result.Id);
+        _userIdsToDelete.Add(createUserResult.Id);
+        _bookIdsToDelete.Add(createBookResult.Id);
     }
 
     public static IEnumerable<object?[]> BorrowingBorrow_BadRequest_Data()
@@ -90,9 +111,19 @@ public class BorrowingBorrow(CustomWebApplicationFactory<Program> factory) : ICl
 
     public async Task DisposeAsync()
     {
-        foreach (var id in _idsToDelete)
+        foreach (var id in _borrowingIdsToDelete)
         {
             await _client.DeleteAsync($"/api/borrowing/return/{id}");
+        }
+
+        foreach (var id in _userIdsToDelete)
+        {
+            await _client.DeleteAsync($"/api/user/{id}");
+        }
+
+        foreach (var id in _bookIdsToDelete)
+        {
+            await _client.DeleteAsync($"/api/book/{id}");
         }
     }
 }

@@ -15,19 +15,31 @@ namespace BookLibrary.Api.Controllers;
 public class BorrowingController : ControllerBase
 {
     private readonly IBorrowingService _borrowingService;
+    private readonly IBookService _bookService;
+    private readonly IUserService _userService;
 
     /// <summary>
     /// Initializes a new instance of <see cref="BorrowingController"/> class.
     /// </summary>
     /// <param name="borrowingService"></param>
+    /// <param name="bookService"></param>
+    /// <param name="userService"></param>
     /// <exception cref="ArgumentNullException">
     /// <para>The <paramref name="borrowingService"/> is <see langword="null"/>.</para>
+    /// <para>- or -</para>
+    /// <para>The <paramref name="bookService"/> is <see langword="null"/>.</para>
+    /// <para>- or -</para>
+    /// <para>The <paramref name="userService"/> is <see langword="null"/>.</para>
     /// </exception>
-    public BorrowingController(IBorrowingService borrowingService)
+    public BorrowingController(IBorrowingService borrowingService, IBookService bookService, IUserService userService)
     {
         ArgumentNullException.ThrowIfNull(borrowingService);
+        ArgumentNullException.ThrowIfNull(bookService);
+        ArgumentNullException.ThrowIfNull(userService);
 
         _borrowingService = borrowingService;
+        _bookService = bookService;
+        _userService = userService;
     }
 
     /// <summary>
@@ -80,6 +92,46 @@ public class BorrowingController : ControllerBase
             });
         }
 
+        var borrowedBook = await _bookService.GetBookAsync(borrowing.BookId, cancellationToken);
+
+        if (borrowedBook is null)
+        {
+            return ValidationProblem(new ValidationProblemDetails
+            {
+                Status = (int)HttpStatusCode.BadRequest,
+                Errors =
+                        {
+                            { "BookId", new[] { $"The book with Id {borrowing.BookId} does not exist." } }
+                        }
+            });
+        }
+
+        var user = await _userService.GetUserAsync(borrowing.UserId, cancellationToken);
+
+        if (user is null)
+        {
+            return ValidationProblem(new ValidationProblemDetails
+            {
+                Status = (int)HttpStatusCode.BadRequest,
+                Errors =
+                        {
+                            { "UserId", new[] { $"The user with Id {borrowing.UserId} does not exist." } }
+                        }
+            });
+        }
+
+        if (borrowedBook.Borrowed)
+        {
+            return ValidationProblem(new ValidationProblemDetails
+            {
+                Status = (int)HttpStatusCode.BadRequest,
+                Errors =
+                        {
+                            { "BookId", new[] { $"The book with Id {borrowing.BookId} is already borrowed." } }
+                        }
+            });
+        }
+
         var newBorrowing = new Borrowing
         {
             Id = Guid.NewGuid(),
@@ -90,6 +142,10 @@ public class BorrowingController : ControllerBase
         };
 
         var result = await _borrowingService.CreateBorrowingAsync(newBorrowing, cancellationToken);
+
+        borrowedBook.Borrowed = true;
+
+        await _bookService.UpdateBookAsync(borrowedBook, cancellationToken);
 
         return Ok(result);
     }
@@ -120,11 +176,22 @@ public class BorrowingController : ControllerBase
             });
         }
 
-        var deleted = await _borrowingService.DeleteBorrowingAsync(id, cancellationToken);
+        var borrowing = await _borrowingService.GetBorrowingAsync(id, cancellationToken);
 
-        if (!deleted)
+        if (borrowing is null)
         {
             return NotFound($"Borrowing with ID {id} does not exist.");
+        }
+
+        var borrowedBook = await _bookService.GetBookAsync(borrowing.BookId, cancellationToken);
+
+        if (borrowedBook is not null)
+        {
+            borrowedBook.Borrowed = false;
+
+            await _borrowingService.DeleteBorrowingAsync(id, cancellationToken);
+
+            await _bookService.UpdateBookAsync(borrowedBook, cancellationToken);
         }
 
         return Ok();
